@@ -1,0 +1,743 @@
+---
+title: "final_project1"
+output:
+  html_document:
+    df_print: paged
+  pdf_document:
+    latex_engine: xelatex
+---
+### Introduction
+Social media plays a central role in the emotional and social lives of young adults, yet its psychological impact remains complex and often counterintuitive. Prior research suggests that emotional outcomes may depend not only on how much people use social media, but how and where they engage online. Rather than assuming that heavier use is uniformly harmful, emerging work points toward nonlinear effects, platform-specific experiences, and possible reverse-causality mechanisms in which emotional distress shapes online behavior rather than the reverse.
+
+### Research Question
+
+How is daily social-media usage associated with psychological distress, and do these relationships vary by usage intensity and platform type?
+
+### Motivation
+
+Although popular narratives emphasize the risks of “heavy” social-media use, empirical findings remain mixed. Some studies report increased anxiety with greater exposure, while others show that distressed individuals may actually disengage from online environments or seek out specific platforms for coping or social support. These competing explanations motivate an exploratory approach that examines:
+	1.	Differences in distress between light vs. heavy social-media users
+	2.	Variation in distress across platforms with different social norms and communication styles
+	3.	Whether the relationship between usage hours and distress follows a nonlinear pattern (e.g., inverted-U or U-shaped), rather than a simple upward trend
+
+### Analytic Strategy
+
+Using a large survey dataset on social-media behavior and mental-health outcomes, we:
+	•	Clean and construct indicators of distress, daily usage hours, heavy-use thresholds, and platform categories
+	•	Compare distress rates across usage-intensity groups (light vs. heavy users)
+	•	Visualize platform-specific variation in distress
+	•	Fit logistic regression models controlling for demographics and platform differences
+	•	Explore nonlinear patterns by smoothing distress across continuous usage hours
+
+This analytic framework allows us to move beyond simplistic assumptions about “more use equals more distress” and instead identify whether psychological distress is concentrated among particular types of users, platforms, or usage patterns.
+
+### Hypotheses
+
+**H1: Usage-intensity difference**  
+H1: Psychological distress differs between light and heavy social-media users.  
+H0: Psychological distress does not differ between light and heavy users.
+
+---
+
+**H2: Platform heterogeneity**  
+H2: Psychological distress varies across social-media platforms.  
+H0: Psychological distress is equal across all platforms.
+
+---
+
+**H3: Nonlinear exposure pattern**  
+H3: The relationship between daily usage hours and psychological distress is nonlinear.  
+H0: The relationship between usage hours and distress is strictly linear.
+
+To address this question, we analyze survey data from the Kaggle dataset *“Social Media Usage and Emotional Well-Being.”* We conduct data cleaning, descriptive analysis, hypothesis testing, and logistic regression modeling controlling for demographics and platform type.
+
+---
+
+# Data Cleaning & Variable Construction
+
+To prepare the dataset for statistical analysis, we first imported and merged the three available files (`train`, `test`, `val`). Since column types were inconsistent across files, we initially converted all variables to character format before rebinding, then recoded them into appropriate types.
+
+We also constructed two key analytic variables:
+
+- **`heavy_use`** (1 = >= 3 hours/day; 0 = < 3 hours/day)
+- **`distress`** (1 = reporting negative dominant emotions such as anxiety or sadness; 0 = happiness or neutral)
+```{r}
+library(tidyverse)
+library(readr)
+library(ggplot2)
+```
+
+```{r}
+val <- read_csv("~/Desktop/COMPSS212/project/archive/val.csv",col_types = cols(.default = "c"))
+train <- read_csv("~/Desktop/COMPSS212/project/archive/train.csv",col_types = cols(.default = "c"))
+test <- read_csv("~/Desktop/COMPSS212/project/archive/test.csv",col_types = cols(.default = "c"))
+```
+```{r}
+View(val)
+```
+
+
+```{r}
+raw <- bind_rows(train, val, test)
+
+clean <- raw %>%
+  mutate(
+    User_ID   = as.character(User_ID),
+    Age       = parse_number(Age),
+    Gender    = as.character(Gender),
+    Platform  = as.character(Platform),
+    usage_minutes = parse_number(`Daily_Usage_Time (minutes)`),
+    Posts_Per_Day             = parse_number(Posts_Per_Day),
+    Likes_Received_Per_Day    = parse_number(Likes_Received_Per_Day),
+    Comments_Received_Per_Day = parse_number(Comments_Received_Per_Day),
+    Messages_Sent_Per_Day     = parse_number(Messages_Sent_Per_Day)
+  ) %>%
+  filter(!is.na(Age)) %>%
+  filter(Gender %in% c("Female", "Male", "Non-binary")) %>%
+  mutate(
+    Gender   = factor(Gender, levels = c("Male", "Female", "Non-binary")),
+    Platform = factor(Platform),
+    usage_hours = usage_minutes / 60,
+    heavy_use   = if_else(usage_hours >= 3, 1L, 0L),
+    distress    = if_else(
+      Dominant_Emotion %in% c("Anxiety", "Sadness", "Anger", "Boredom", "Agression"),
+      1L, 0L
+    )
+  ) %>%
+  distinct()
+```
+
+To evaluate the cleaning results, we examined summary statistics and frequencies.
+```{r}
+dim(raw)      
+dim(clean)   
+
+summary(clean$Age)
+mean(clean$heavy_use)
+mean(clean$distress)
+table(clean$Gender)
+table(clean$Dominant_Emotion)
+```
+
+# Descriptive Comparison
+Before hypothesis testing, we compared psychological distress rates between heavy users and light users. This provides an initial understanding of the magnitude of difference.
+1. Distress rate by usage intensity（H1）
+(a) Summary table
+```{r}
+clean %>%
+  group_by(heavy_use) %>%
+  summarise(
+    mean_distress = mean(distress),
+    count = n()
+  )
+
+```
+(b) Bar Chart
+```{r}
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+h1_summary <- clean %>%
+  group_by(heavy_use) %>%
+  summarise(
+    mean_distress = mean(distress, na.rm = TRUE),
+    count         = n()
+  )
+
+h1_plot_data <- h1_summary %>%
+  mutate(
+    heavy_label = if_else(
+      heavy_use == 1L,
+      "Heavy users (≥ 3 hours/day)",
+      "Light users (< 3 hours/day)"
+    ),
+    heavy_label = factor(
+      heavy_label,
+      levels = c("Light users (< 3 hours/day)",
+                 "Heavy users (≥ 3 hours/day)")
+    ),
+    label_pct = percent(mean_distress, accuracy = 1),
+    label_n   = paste0("n = ", count)
+  )
+
+
+p_h1 <- ggplot(h1_plot_data,
+               aes(x = heavy_label, y = mean_distress, fill = heavy_label)) +
+  geom_col(width = 0.6, show.legend = FALSE) +
+  geom_text(
+    aes(label = label_pct),
+    vjust = -0.5,
+    size  = 3.8
+  ) +
+  geom_text(
+    aes(label = label_n),
+    vjust = 1.7,
+    color = "white",
+    size  = 3.2
+  ) +
+  scale_y_continuous(
+    labels = percent_format(accuracy = 1),
+    limits = c(0, 1),
+    expand = expansion(mult = c(0, 0.08))
+  ) +
+  labs(
+    x = NULL,
+    y = "Share reporting psychological distress",
+    title    = "Distress rate by usage intensity (H1)",
+    subtitle = "Light vs heavy daily social-media users",
+    caption  = "Note: Heavy users are defined as ≥ 3 hours/day."
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title      = element_text(face = "bold"),
+    axis.text.x     = element_text(size = 11),
+    axis.title.y    = element_text(size = 11),
+    plot.subtitle   = element_text(size = 10),
+    plot.caption    = element_text(size = 8, hjust = 0),
+    panel.background  = element_rect(fill = "transparent", colour = NA),
+    plot.background   = element_rect(fill = "transparent", colour = NA),
+    legend.background = element_rect(fill = "transparent", colour = NA)
+  )
+
+p_h1
+
+```
+```{r}
+ggsave(
+  filename = "h1_distress_by_usage.png",
+  plot     = p_h1,
+  width    = 6,
+  height   = 4,
+  dpi      = 300,
+  bg       = "transparent"  
+)
+```
+
+2. Distress rate by platform（H2）
+(a) Summary table
+```{r}
+h2_summary <- clean %>%
+  group_by(Platform) %>%
+  summarise(
+    mean_distress = mean(distress, na.rm = TRUE),
+    count         = n()
+  ) %>%
+  arrange(desc(mean_distress))
+
+h2_summary
+
+```
+(b) Bar chart
+```{r}
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(forcats)
+
+
+h2_summary <- clean %>%
+  group_by(Platform) %>%
+  summarise(
+    mean_distress = mean(distress, na.rm = TRUE),
+    count         = n()
+  )
+
+
+h2_plot_data <- h2_summary %>%
+  filter(count >= 30) %>%                       
+  mutate(
+    Platform  = fct_reorder(Platform, mean_distress),
+    label_pct = percent(mean_distress, accuracy = 1),
+    label_n   = paste0("n = ", count),
+    label_all = paste0(label_pct, "\n", label_n)
+  )
+
+p_h2 <- ggplot(h2_plot_data,
+       aes(x = Platform, y = mean_distress, fill = Platform)) +
+  geom_col(width = 0.6, show.legend = FALSE) +
+  geom_text(
+    aes(label = label_all),
+    hjust = -0.1,
+    size  = 3
+  ) +
+  coord_flip() +
+  scale_y_continuous(
+    labels = percent_format(accuracy = 1),
+    limits = c(0, max(h2_plot_data$mean_distress) * 1.15),
+    expand = expansion(mult = c(0, 0.02))
+  ) +
+  labs(
+    x = "Platform",
+    y = "Distress rate",
+    title    = "Distress rate by platform (H2 preview)",
+    subtitle = "Platforms with at least 30 users",
+    caption  = "Note: Distress = negative dominant emotion (e.g., anxiety, sadness, anger, boredom)."
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold"),
+    axis.text.x   = element_text(size = 10),
+    axis.text.y   = element_text(size = 10),
+    axis.title.y  = element_text(size = 11),
+    axis.title.x  = element_text(size = 11),
+    plot.subtitle = element_text(size = 9),
+    plot.caption  = element_text(size = 8, hjust = 0),
+   
+    panel.background      = element_rect(fill = "transparent", colour = NA),
+    plot.background       = element_rect(fill = "transparent", colour = NA),
+    legend.background     = element_rect(fill = "transparent", colour = NA),
+    legend.box.background = element_rect(fill = "transparent", colour = NA)
+  )
+
+p_h2
+
+ggsave(
+  filename = "h2_distress_by_platform_transparent.png",
+  plot     = p_h2,
+  width    = 6.5,
+  height   = 4.5,
+  dpi      = 300,
+  bg       = "transparent"
+)
+
+
+```
+
+3. Distress vs usage hours（H3）
+3a. Binned means plot
+```{r}
+# Create usage-hour bins
+h3_binned <- clean %>%
+  mutate(
+    usage_bin = cut(
+      usage_hours,
+      breaks = c(0, 1, 2, 3, 4, 5, Inf),
+      right  = FALSE,
+      labels = c("0–1", "1–2", "2–3", "3–4", "4–5", "5+")
+    )
+  ) %>%
+  group_by(usage_bin) %>%
+  summarise(
+    mean_distress = mean(distress, na.rm = TRUE),
+    count         = n()
+  )
+
+h3_binned
+
+# Plot
+h3_binned %>%
+  ggplot(aes(x = usage_bin, y = mean_distress, group = 1)) +
+  geom_line() +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = percent_format(accuracy = 1),
+                     limits = c(0, 1)) +
+  labs(
+    x = "Daily usage hours (binned)",
+    y = "Distress rate",
+    title = "Distress vs daily usage hours (binned means, H3)"
+  ) +
+  theme_minimal()
+
+```
+3b. LOESS smooth
+```{r}
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+max_x <- quantile(clean$usage_hours, 0.99, na.rm = TRUE)
+
+h3_loess_data <- clean %>%
+  filter(!is.na(usage_hours),
+         usage_hours <= max_x)
+
+p_h3_loess <- ggplot(h3_loess_data,
+                     aes(x = usage_hours, y = distress)) +
+  geom_jitter(height = 0.03, width = 0.02,
+              alpha = 0.08, size = 0.6) +
+  geom_smooth(method = "loess", se = TRUE, span = 0.8) +
+  scale_y_continuous(
+    labels = percent_format(accuracy = 1),
+    limits = c(0, 1),
+    expand = expansion(mult = c(0, 0.02))
+  ) +
+  labs(
+    x = "Daily social-media usage (hours)",
+    y = "Estimated probability of distress",
+    title    = "Distress vs daily usage hours (LOESS, H3)",
+    subtitle = "LOESS smooth for binary distress outcome",
+    caption  = "Note: Distress = negative dominant emotion; extreme (>99th percentile) usage trimmed."
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold"),
+    axis.text.x   = element_text(size = 10),
+    axis.text.y   = element_text(size = 10),
+    axis.title.x  = element_text(size = 11),
+    axis.title.y  = element_text(size = 11),
+    plot.subtitle = element_text(size = 9),
+    plot.caption  = element_text(size = 8, hjust = 0),
+    panel.background      = element_rect(fill = "transparent", colour = NA),
+    plot.background       = element_rect(fill = "transparent", colour = NA),
+    legend.background     = element_rect(fill = "transparent", colour = NA),
+    legend.box.background = element_rect(fill = "transparent", colour = NA)
+  )
+
+p_h3_loess
+
+ggsave(
+  filename = "h3_loess_usage_vs_distress.png",
+  plot     = p_h3_loess,
+  width    = 6.5,
+  height   = 4.5,
+  dpi      = 300,
+  bg       = "transparent"
+)
+
+
+```
+
+
+model1
+```{r}
+# Logistic regression for H1: heavy vs light users
+model_H1 <- glm(
+  distress ~ heavy_use + Age + Gender + Platform,
+  data   = clean,
+  family = binomial
+)
+
+summary(model_H1)
+
+```
+```{r}
+# Odds ratios
+or_H1 <- exp(coef(model_H1))
+
+# 95% CI for odds ratios
+ci_H1 <- exp(confint(model_H1))
+
+or_H1
+ci_H1
+
+```
+```{r}
+install.packages("broom")  
+library(broom)
+
+h1_tidy <- tidy(
+  model_H1,
+  conf.int    = TRUE,
+  exponentiate = TRUE  
+)
+
+h1_tidy
+
+```
+```{r}
+h1_tidy %>%
+  filter(term == "heavy_use")
+
+```
+```{r}
+
+mean_age      <- mean(clean$Age, na.rm = TRUE)
+mode_gender   <- names(which.max(table(clean$Gender)))
+mode_platform <- names(which.max(table(clean$Platform)))
+
+newdat_H1 <- data.frame(
+  heavy_use = c(0, 1),
+  Age       = mean_age,
+  Gender    = factor(mode_gender,   levels = levels(clean$Gender)),
+  Platform  = factor(mode_platform, levels = levels(clean$Platform))
+)
+
+newdat_H1$pred_prob <- predict(model_H1, newdata = newdat_H1, type = "response")
+newdat_H1
+
+```
+```{r}
+library(dplyr)
+library(broom)
+
+h1_table <- tidy(
+  model_H1,
+  conf.int    = TRUE,
+  exponentiate = TRUE  
+) %>%
+
+  filter(term %in% c(
+    "heavy_use",
+    "Age",
+    "GenderNon-binary",
+    "PlatformInstagram",
+    "PlatformTwitter"
+  )) %>%
+  mutate(
+
+    term = recode(term,
+      "heavy_use"         = "Heavy use (≥ 3 hours/day)",
+      "Age"               = "Age (per year)",
+      "GenderNon-binary"  = "Non-binary (vs male)",
+      "PlatformInstagram" = "Instagram (vs Facebook)",
+      "PlatformTwitter"   = "Twitter (vs Facebook)"
+    ),
+    OR      = round(estimate, 2),
+    CI      = sprintf("[%.2f, %.2f]", conf.low, conf.high),
+    p_value = sprintf("%.3f", p.value)
+  ) %>%
+  select(
+    Predictor   = term,
+    `Odds ratio` = OR,
+    `95% CI`     = CI,
+    `p-value`    = p_value
+  )
+
+h1_table
+
+
+```
+
+# Causal Analysis: DAGs and Matching
+
+## 1. Causal Diagram (DAG)
+We hypothetically assume the following causal path of the dataset:
+```{R}
+library(dagitty)
+library(ggdag)
+library(ggplot2)
+
+simple_dag <- dagify(
+  distress  ~ heavy_use + Age + Gender + Platform,
+  heavy_use ~ Age + Gender + Platform,
+  exposure  = "heavy_use",
+  outcome   = "distress",
+  coords    = list(
+    x = c(
+      Age      = 0,
+      Gender   = 0,
+      heavy_use = 2,
+      distress  = 2,
+      Platform  = 4
+    ),
+    y = c(
+      Age      = 2,
+      Gender   = 0,
+      heavy_use = 1,
+      distress  = 2,
+      Platform  = 1
+    )
+  )
+)
+
+p_dag <- ggdag(simple_dag, text = FALSE, use_labels = "name") +
+  geom_dag_point(size = 9, colour = "black") +
+  geom_dag_text(colour = "white", size = 4.2) +
+  geom_dag_edges(
+    arrow_directed = grid::arrow(length = unit(8, "pt"), type = "closed")
+  ) +
+  labs(title = "Causal diagram for H1: heavy use \u2192 distress") +
+  theme_dag() +
+  theme(
+    plot.title   = element_text(face = "bold", hjust = 0),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    plot.background  = element_rect(fill = "transparent", colour = NA),
+    axis.title  = element_blank(),
+    axis.text   = element_blank(),
+    axis.ticks  = element_blank(),
+    plot.margin = margin(10, 40, 10, 40)  
+  ) +
+  coord_cartesian(clip = "off")
+
+p_dag
+
+ggsave(
+  filename = "dag_h1.png",
+  plot     = p_dag,
+  width    = 6,
+  height   = 4,
+  dpi      = 300,
+  bg       = "transparent"
+)
+
+```
+```{r}
+ggsave(
+  filename = "~/Downloads/dag_h1.png",
+  plot     = p_dag,
+  width    = 6,
+  height   = 4,
+  dpi      = 300,
+  bg       = "transparent"
+)
+
+```
+
+
+## 2. Propensity Score Matching
+```{r}
+
+library(MatchIt)
+
+set.seed(1)
+match_simple <- matchit(heavy_use ~ Age + Gender + Platform,
+                        data = clean,
+                        method = "nearest",
+                        ratio = 8)
+
+matched_data <- match.data(match_simple)
+
+library(MatchIt)
+
+# Perform 1:5 nearest neighbor matching
+set.seed(1)
+match_simple <- matchit(heavy_use ~ Age + Gender + Platform,
+                        data = clean,
+                        method = "nearest",
+                        ratio = 8)
+
+# Extract matched data
+matched_data <- match.data(match_simple)
+matched_data
+```
+
+
+## 3. Comparison: Before vs After Matching
+```{r}
+cat("\nOriginal sample (unmatched):\n")
+original_test <- t.test(distress ~ heavy_use, data = clean)
+print(original_test)
+
+cat("\nMatched sample (balanced):\n")
+matched_test <- t.test(distress ~ heavy_use, data = matched_data)
+print(matched_test)
+```
+By comparison of the t-test results before and after matching, we found a increase p-value. After matching the result is not significant. It reveals that t test result originally cannot give a reliable conclusion. We should control for other variables for causal conclusion.
+
+## 4. Regression Analysis on Matched Sample
+```{r}
+model_matched <- glm(distress ~ heavy_use + Age + Gender + Platform,
+                     data = matched_data,
+                     family = binomial)
+
+cat("\n=== Comparison of Odds Ratios ===\n")
+cat("Original model OR:", round(exp(coef(model_H1)["heavy_use"]), 3), "\n")
+cat("Matched sample OR:", round(exp(coef(model_matched)["heavy_use"]), 3), "\n")
+```
+
+Interpretation: OR=5.348 > 1 indicates heavy users have higher odds of distress. After matching, the odds ratio increase a lot, indicating that the causal relationship is much higher than we expected in the regression analysis before matching.
+
+
+## 5. Visualization: Comparison Before/After Matching
+```{r}
+ggplot(compare_df, aes(x = Usage_Group, y = Distress_Rate, fill = Sample)) +
+  geom_bar(stat = "identity", position = position_dodge(0.8)) +
+  geom_text(aes(label = paste0(round(Distress_Rate * 100, 1), "%\n(n=", Count, ")")),
+            position = position_dodge(0.8)) +
+  labs(
+    title = "Distress Rates: Original vs Matched Sample",
+    subtitle = "Propensity score matching balances Age, Gender, and Platform",
+    y = "Proportion with Distress",
+    fill = "Sample Type"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11)
+  ) +
+  scale_fill_manual(values = c("Original" = "#E69F00", "Matched" = "#0072B2")) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1))
+
+```
+
+```{R}
+library(ggplot2)
+library(scales)
+library(dplyr)
+
+compare_df <- compare_df %>%
+  mutate(
+    Usage_Group = factor(Usage_Group,
+                         levels = c("Heavy Users", "Light Users")),
+    Sample = factor(Sample,
+                    levels = c("Original", "Matched"))
+  )
+
+# 画图对象
+p_psm <- ggplot(compare_df,
+                aes(x = Usage_Group,
+                    y = Distress_Rate,
+                    fill = Sample)) +
+  geom_bar(stat = "identity",
+           position = position_dodge(width = 0.7),
+           width = 0.6) +
+  geom_text(
+    aes(label = paste0(round(Distress_Rate * 100, 1), "%\n(n=", Count, ")")),
+    position = position_dodge(width = 0.7),
+    vjust = -0.3,
+    size = 3.3
+  ) +
+  scale_y_continuous(
+    labels = percent_format(accuracy = 1),
+    limits = c(0, 0.7),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  scale_fill_manual(
+    values = c("Original" = "#E69F00", "Matched" = "#0072B2")
+  ) +
+  labs(
+    title    = "Distress Rates: Original vs Matched Sample",
+    subtitle = "Propensity score matching balances age, gender, and platform",
+    x        = "Usage group",
+    y        = "Proportion with distress",
+    fill     = "Sample type"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 10),
+    axis.title.x  = element_text(margin = margin(t = 8)),
+    axis.title.y  = element_text(margin = margin(r = 8)),
+    legend.position = "right",
+    panel.background      = element_rect(fill = "transparent", colour = NA),
+    plot.background       = element_rect(fill = "transparent", colour = NA),
+    legend.background     = element_rect(fill = "transparent", colour = NA),
+    legend.box.background = element_rect(fill = "transparent", colour = NA)
+  )
+
+p_psm
+
+ggsave(
+  filename = "psm_distress_original_vs_matched.png",
+  plot     = p_psm,
+  width    = 6.5,
+  height   = 4.5,
+  dpi      = 300,
+  bg       = "transparent"
+)
+
+```
+```{r}
+ggsave(
+  filename = "psm_distress_original_vs_matched.png",
+  plot     = p_psm,
+  width    = 6.5,
+  height   = 4.5,
+  dpi      = 300,
+  bg       = "transparent"
+)
+
+```
+
+```{r}
+getwd()
+list.files(pattern = "psm")
+
+```
+
+Propensity score matching created more comparable groups on observed covariates (age, gender, platform) between heavy users and light users. The matched analysis yielded similar conclusion as before, suggesting the finding is roughly robust to selection bias on these variables; the conclusion after matching is more reliable as it reveals causal relationship instead of correlation only. We can see stronger causal effect than correlation effect.
+
+
+
+
